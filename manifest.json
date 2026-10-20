@@ -1,0 +1,28 @@
+{
+  "name": "Keroro藍星地下侵略計畫",
+  "short_name": "KeroroBase",
+  "description": "Keroro軍曹：藍星地下侵略計畫 — 地面侵略關卡手機觸控原型",
+  "lang": "zh-Hant",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0d1b0f",
+  "theme_color": "#2e7d32",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
