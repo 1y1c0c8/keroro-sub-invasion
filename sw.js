@@ -5,7 +5,7 @@
  * 部署新版本時請務必更新 CACHE_VERSION，舊快取會在 activate 階段自動清除；
  * 否則 Cache-first 會一直回傳舊版 index.html。
  */
-const CACHE_VERSION = 'v1.0.0';
+const CACHE_VERSION = 'v1.0.1';
 const CACHE_PREFIX = 'keroro-base-';
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 
@@ -30,10 +30,11 @@ const OPTIONAL_ASSETS = [
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(CORE_ASSETS);
+    // cache: 'reload' 繞過瀏覽器 HTTP 快取，確保抓到剛部署的新版檔案
+    await cache.addAll(CORE_ASSETS.map((url) => new Request(url, { cache: 'reload' })));
     await Promise.all(
       OPTIONAL_ASSETS.map((url) =>
-        cache.add(url).catch((err) => console.warn('[SW] 選用資源快取失敗：', url, err))
+        cache.add(new Request(url, { cache: 'reload' })).catch((err) => console.warn('[SW] 選用資源快取失敗：', url, err))
       )
     );
     await self.skipWaiting();

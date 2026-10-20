@@ -76,8 +76,23 @@
       pointer-events: none;
     }
 
+    /* 移動區整塊可觸控（含按鍵間空隙與外圍），按鍵本身只負責顯示 */
     .pad.left {
-      left: calc(18px + env(safe-area-inset-left));
+      left: env(safe-area-inset-left);
+      bottom: env(safe-area-inset-bottom);
+      padding: 18px 32px 18px 18px;
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    .pad.left .btn {
+      pointer-events: none;
+    }
+
+    /* 護身符反轉中：移動鍵變紫色提示 */
+    .pad.left.reversed .btn {
+      border-color: rgba(179, 136, 255, 0.95);
+      background: rgba(126, 87, 194, 0.4);
     }
 
     .pad.right {
@@ -177,9 +192,10 @@
 
   <!-- 虛擬按鍵：左側移動、右側 JUMP / SKILL -->
   <div id="controls" aria-hidden="true">
-    <div class="pad left">
-      <div class="btn arrow" data-key="left">◀</div>
-      <div class="btn arrow" data-key="right">▶</div>
+    <!-- 左右移動共用一個觸控區：手指可在兩鍵間滑動切換，按鍵間的空隙也有效 -->
+    <div class="pad left" id="movePad">
+      <div class="btn arrow" data-dir="left">◀</div>
+      <div class="btn arrow" data-dir="right">▶</div>
     </div>
     <div class="pad right">
       <div class="btn skill" data-key="skill" id="skillBtn">SKILL</div>
@@ -279,12 +295,23 @@
       const input = { left: false, right: false, jump: false, skill: false };
       const pressed = { jump: false, skill: false };   // 本幀按下（edge）
 
+      let lastHorizontal = 'right';                    // 左右同時按住時，以最後按下的方向為準
+      const releaseFns = [];                           // 各觸控區的「全部放開」函式
+
       function setKey(name, down) {
-        if (down && !input[name] && name in pressed) pressed[name] = true;
+        if (down && !input[name]) {
+          if (name in pressed) pressed[name] = true;
+          if (name === 'left' || name === 'right') lastHorizontal = name;
+        }
         input[name] = down;
       }
 
+      function releaseAllPointers() {
+        releaseFns.forEach((fn) => fn());
+      }
+
       function clearInput() {
+        releaseAllPointers();
         input.left = input.right = input.jump = input.skill = false;
         pressed.jump = pressed.skill = false;
         document.querySelectorAll('.btn.active').forEach((b) => b.classList.remove('active'));
@@ -325,7 +352,63 @@
 
       window.addEventListener('blur', clearInput);
 
-      // 虛擬按鍵：支援多點觸控（同時按移動 + 跳躍）
+      // 移動觸控區：依手指目前位置決定左或右，滑動即可切換方向
+      const movePad = document.getElementById('movePad');
+      const leftBtn = movePad.querySelector('[data-dir="left"]');
+      const rightBtn = movePad.querySelector('[data-dir="right"]');
+      const movePointers = new Map();                  // pointerId → 'left' | 'right'
+
+      function dirAt(clientX) {
+        const a = leftBtn.getBoundingClientRect();
+        const b = rightBtn.getBoundingClientRect();
+        const mid = ((a.left + a.right) / 2 + (b.left + b.right) / 2) / 2;
+        return clientX < mid ? 'left' : 'right';
+      }
+
+      function syncMove() {
+        let l = false;
+        let r = false;
+        movePointers.forEach((d) => {
+          if (d === 'left') l = true;
+          else r = true;
+        });
+        setKey('left', l);
+        setKey('right', r);
+        leftBtn.classList.toggle('active', l);
+        rightBtn.classList.toggle('active', r);
+      }
+
+      movePad.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (state !== 'playing') {
+          handleStartTap();
+          return;
+        }
+        try { movePad.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        movePointers.set(e.pointerId, dirAt(e.clientX));
+        syncMove();
+      });
+      movePad.addEventListener('pointermove', (e) => {
+        if (!movePointers.has(e.pointerId)) return;
+        const d = dirAt(e.clientX);
+        if (d !== movePointers.get(e.pointerId)) {
+          movePointers.set(e.pointerId, d);
+          syncMove();
+        }
+      });
+      const endMove = (e) => {
+        if (movePointers.delete(e.pointerId)) syncMove();
+      };
+      movePad.addEventListener('pointerup', endMove);
+      movePad.addEventListener('pointercancel', endMove);
+      movePad.addEventListener('lostpointercapture', endMove);
+      movePad.addEventListener('contextmenu', (e) => e.preventDefault());
+      releaseFns.push(() => {
+        movePointers.clear();
+        syncMove();
+      });
+
+      // 動作按鍵：支援多點觸控（同時按移動 + 跳躍）
       document.querySelectorAll('[data-key]').forEach((btn) => {
         const key = btn.dataset.key;
         const pointers = new Set();
@@ -352,7 +435,18 @@
         btn.addEventListener('pointercancel', release);
         btn.addEventListener('lostpointercapture', release);
         btn.addEventListener('contextmenu', (e) => e.preventDefault());
+        releaseFns.push(() => {
+          pointers.clear();
+          sync();
+        });
       });
+
+      // 保險：所有手指都離開螢幕時強制放開全部按鍵，避免漏接 pointerup 造成按鍵卡住
+      const onTouchEnd = (e) => {
+        if (e.touches.length === 0) releaseAllPointers();
+      };
+      document.addEventListener('touchend', onTouchEnd, { passive: true });
+      document.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
       document.addEventListener('touchstart', () => document.body.classList.add('touch'), { passive: true });
       document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -456,11 +550,17 @@
 
       // 切到背景或直拿手機時自動暫停
       document.addEventListener('visibilitychange', () => {
-        if (document.hidden && state === 'playing') state = 'paused';
+        if (document.hidden && state === 'playing') {
+          state = 'paused';
+          clearInput();
+        }
       });
       const portraitMQ = window.matchMedia('(orientation: portrait) and (pointer: coarse)');
       const onPortrait = () => {
-        if (portraitMQ.matches && state === 'playing') state = 'paused';
+        if (portraitMQ.matches && state === 'playing') {
+          state = 'paused';
+          clearInput();
+        }
       };
       if (portraitMQ.addEventListener) portraitMQ.addEventListener('change', onPortrait);
       else if (portraitMQ.addListener) portraitMQ.addListener(onPortrait);
@@ -605,7 +705,10 @@
 
       function updatePlayer(dt) {
         const p = player;
-        let dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+        let dir = 0;
+        if (input.left && input.right) dir = lastHorizontal === 'right' ? 1 : -1;
+        else if (input.right) dir = 1;
+        else if (input.left) dir = -1;
         if (p.reverseT > 0) dir = -dir;                 // 護身符：方向反轉
         if (dir !== 0) p.facing = dir;
 
@@ -1178,13 +1281,19 @@
         }
       }
 
-      // 同步 SKILL 按鈕發光狀態
+      // 同步 SKILL 按鈕發光狀態與移動鍵反轉提示
       let lastSkillReady = null;
-      function syncSkillButton() {
+      let lastReversed = null;
+      function syncButtons() {
         const ready = state === 'playing' && resonance >= RESONANCE_MAX;
         if (ready !== lastSkillReady) {
           skillBtn.classList.toggle('ready', ready);
           lastSkillReady = ready;
+        }
+        const reversed = state === 'playing' && player.reverseT > 0;
+        if (reversed !== lastReversed) {
+          movePad.classList.toggle('reversed', reversed);
+          lastReversed = reversed;
         }
       }
 
@@ -1195,9 +1304,12 @@
         last = now;
         update(dt);
         render();
-        syncSkillButton();
+        syncButtons();
         requestAnimationFrame(loop);
       }
+
+      // 讓 Service Worker 更新時判斷是否可以安全重新整理
+      window.keroroIsPlaying = () => state === 'playing';
 
       resetGame();
       player.y = GROUND_Y - PLAYER.size;
@@ -1215,6 +1327,17 @@
           .catch((err) => {
             console.warn('[PWA] Service Worker 註冊失敗：', err);
           });
+      });
+
+      // 新版 Service Worker 接手後自動重新整理；遊戲進行中則等這局結束
+      const hadController = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController) return;
+        const tryReload = () => {
+          if (window.keroroIsPlaying && window.keroroIsPlaying()) setTimeout(tryReload, 1000);
+          else location.reload();
+        };
+        tryReload();
       });
     }
   </script>
